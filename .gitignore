@@ -1,0 +1,101 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# .gitignore — What never reaches GitHub under any circumstances
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# REAL FINANCIAL DATA — NEVER COMMIT
+# -----------------------------------------------------------------------------
+data/real/
+*.csv
+!data/synthetic/*.csv        # Synthetic test data is allowed
+
+# -----------------------------------------------------------------------------
+# OUTPUT FILES — GENERATED, NOT SOURCE
+# -----------------------------------------------------------------------------
+output/
+*.xlsx
+*.pdf
+
+# -----------------------------------------------------------------------------
+# DATABASE FILES — CONTAINS FINANCIAL HISTORY
+# -----------------------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+*.dump                       # pg_dump backup files
+
+# -----------------------------------------------------------------------------
+# CREDENTIALS AND SECRETS — CRITICAL, NEVER COMMIT
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example                # Template with no real values is allowed
+*.json                       # Catches service account JSON keys
+!package.json                # Exception if ever needed
+secrets/
+credentials/
+
+# -----------------------------------------------------------------------------
+# LOGS — MAY CONTAIN SENSITIVE TRANSACTION DETAILS
+# -----------------------------------------------------------------------------
+*.log
+logs/
+audit.log
+
+# -----------------------------------------------------------------------------
+# PYTHON RUNTIME — GENERATED FILES
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# -----------------------------------------------------------------------------
+# IDE AND EDITOR FILES
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store                    # macOS
+Thumbs.db                    # Windows
+
+# -----------------------------------------------------------------------------
+# JUPYTER NOTEBOOKS — IF USED FOR EXPLORATION
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb                      # Notebook files may cache real data
+
+# -----------------------------------------------------------------------------
+# TEMPORARY FILES
+# -----------------------------------------------------------------------------
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup

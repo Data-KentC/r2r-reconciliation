@@ -1,0 +1,86 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# requirements.txt — All Python libraries required
+# =============================================================================
+# Install locally (if ever needed):
+# pip install -r requirements.txt
+#
+# On GitHub Actions: installed automatically before every run
+# No manual installation needed for cloud-only workflow
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# DATA PROCESSING — Core matching engine
+# -----------------------------------------------------------------------------
+pandas==2.2.2                  # DataFrame operations — entire matching engine
+numpy==1.26.4                  # Numerical operations — FX calculations
+pandera==0.19.3                # Schema validation — NetSuite CSV guard
+
+# -----------------------------------------------------------------------------
+# FUZZY MATCHING — Tier 3 account name comparison
+# -----------------------------------------------------------------------------
+rapidfuzz==3.9.3               # Levenshtein + Jaro-Winkler + token matching
+                               # Replaces fuzzywuzzy — faster, no C dependency
+
+# -----------------------------------------------------------------------------
+# LLM PROVIDERS — Tier 5 orphan suggestion cascade
+# -----------------------------------------------------------------------------
+groq==0.9.0                    # Primary LLM — Llama 3.3 70B (30 RPM free)
+google-genai==0.8.0            # Tertiary LLM — Gemini 2.0 Flash (15 RPM free)
+openai==1.35.3                 # DeepSeek R1 + Qwen via OpenRouter
+                               # Both use OpenAI-compatible SDK
+tenacity==8.3.0                # Retry logic — exponential backoff on 429 errors
+
+# -----------------------------------------------------------------------------
+# DATABASE — Persistence layer
+# -----------------------------------------------------------------------------
+sqlalchemy==2.0.33             # ORM — must be >=2.0.33 (idle connection bug fix)
+psycopg2-binary==2.9.9         # PostgreSQL driver — Supabase connection
+                               # binary version = no C compiler needed
+
+# -----------------------------------------------------------------------------
+# GOOGLE APIS — Gmail, Drive, Sheets
+# -----------------------------------------------------------------------------
+google-api-python-client==2.134.0   # Gmail + Drive + Sheets API client
+google-auth==2.30.0                  # Authentication — WIF + OAuth
+google-auth-oauthlib==1.2.0          # OAuth 2.0 flow — Gmail 3LO token
+google-auth-httplib2==0.2.0          # HTTP transport for Google APIs
+
+# -----------------------------------------------------------------------------
+# OUTPUT — Excel report generation
+# -----------------------------------------------------------------------------
+openpyxl==3.1.3                # Excel file creation — all 4 tabs
+                               # Conditional formatting, frozen panes
+
+# -----------------------------------------------------------------------------
+# CONFIGURATION AND ENVIRONMENT
+# -----------------------------------------------------------------------------
+python-dotenv==1.0.1           # Load .env file locally for development
+pyyaml==6.0.1                  # Read config.yaml
+pydantic==2.7.4                # LLM response schema validation
+                               # Entity whitelist enforcement
+
+# -----------------------------------------------------------------------------
+# NOTIFICATIONS
+# -----------------------------------------------------------------------------
+requests==2.32.3               # HTTP calls — Telegram Bot API fallback
+
+# -----------------------------------------------------------------------------
+# SYNTHETIC DATA GENERATION — Testing only
+# -----------------------------------------------------------------------------
+faker==25.2.0                  # Generate realistic fake financial data
+                               # Used in generate_synthetic.py only
+
+# -----------------------------------------------------------------------------
+# UTILITIES
+# -----------------------------------------------------------------------------
+python-dateutil==2.9.0         # Date parsing — handles NetSuite date formats
+pytz==2024.1                   # Timezone handling — SGT/UTC conversion
+hashlib-compat==1.0.0          # SHA-256 match key generation
+                               # (hashlib is built-in but this ensures compat)
+
+# -----------------------------------------------------------------------------
+# DEVELOPMENT AND TESTING — Not used in production pipeline
+# -----------------------------------------------------------------------------
+pytest==8.2.2                  # Test runner
+pytest-cov==5.0.0              # Test coverage reporting

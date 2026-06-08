@@ -1,0 +1,380 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# config.yaml — Single source of truth for all parameters
+# =============================================================================
+# INSTRUCTIONS FOR USE:
+# 1. Update all TODO items before first real run
+# 2. Never hardcode values in Python — always read from here
+# 3. Any change to this file requires a Pull Request approval
+#    (enforced by .github/CODEOWNERS once that file is created)
+# 4. Update last_verified_date every 90 days — see governance section
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SYSTEM IDENTITY
+# -----------------------------------------------------------------------------
+system:
+  name:             "R2R Intercompany Reconciliation Engine"
+  version:          "1.0.0"
+  environment:      "prototype"          # prototype | production
+  owner:            "Data-KentC"
+  built_by:         "Kent — Singapore CA, APAC Controller"
+
+# -----------------------------------------------------------------------------
+# ENTITIES
+# All 5 APAC entities. Add new entities here — no code changes needed.
+# -----------------------------------------------------------------------------
+entities:
+  ANTH-SG:
+    name:               "Anthrotic Singapore"
+    currency:           "SGD"
+    functional_currency: "SGD"
+    primary_controller: "sg_controller@anthrotic.com"    # TODO: real email
+    backup_controller:  "sg_backup@anthrotic.com"        # TODO: real email
+    telegram_chat_id:   ""                               # TODO: Telegram setup
+    active:             true
+
+  ANTH-AU:
+    name:               "Anthrotic Australia"
+    currency:           "AUD"
+    functional_currency: "AUD"
+    primary_controller: "au_controller@anthrotic.com"    # TODO: real email
+    backup_controller:  "au_backup@anthrotic.com"        # TODO: real email
+    telegram_chat_id:   ""
+    active:             true
+
+  ANTH-IN:
+    name:               "Anthrotic India"
+    currency:           "INR"
+    functional_currency: "INR"
+    primary_controller: "in_controller@anthrotic.com"    # TODO: real email
+    backup_controller:  "in_backup@anthrotic.com"        # TODO: real email
+    telegram_chat_id:   ""
+    active:             true
+
+  ANTH-JP:
+    name:               "Anthrotic Japan"
+    currency:           "JPY"
+    functional_currency: "JPY"
+    primary_controller: "jp_controller@anthrotic.com"    # TODO: real email
+    backup_controller:  "jp_backup@anthrotic.com"        # TODO: real email
+    telegram_chat_id:   ""
+    active:             true
+
+  ANTH-HK:
+    name:               "Anthrotic Hong Kong"
+    currency:           "HKD"
+    functional_currency: "HKD"
+    primary_controller: "hk_controller@anthrotic.com"    # TODO: real email
+    backup_controller:  "hk_backup@anthrotic.com"        # TODO: real email
+    telegram_chat_id:   ""
+    active:             true
+
+# -----------------------------------------------------------------------------
+# NETSUITE FIELD MAPPING
+# TODO: Confirm exact internal field IDs with NetSuite admin before go-live
+# -----------------------------------------------------------------------------
+netsuite:
+  # Internal field IDs as exported by NetSuite GL Saved Search
+  # These are the EXACT column headers in the CSV
+  fields:
+    internal_id:          "internalid"
+    line_sequence:        "linesequencenumber"
+    tran_date:            "trandate"
+    tran_id:              "tranid"               # Shared key for AICJEs
+    account:              "account"
+    debit_amount:         "debitamount"
+    credit_amount:        "creditamount"
+    currency:             "currency"
+    fx_amount:            "fxamount"
+    line_subsidiary:      "subsidiarynohierarchy" # Flat string, not hierarchical
+    cseg_ic:              "cseg_apac_ic"          # TODO: Confirm with NetSuite admin
+    memo:                 "memo"
+
+  # Account code ranges for IC identification fallback
+  # Used when cseg_apac_ic is blank (15-25% of manual JEs)
+  # TODO: Replace with actual account code ranges from your CoA
+  ic_due_from_range:                             # Asset accounts (Due From)
+    start: "18000"
+    end:   "18999"
+
+  ic_due_to_range:                               # Liability accounts (Due To)
+    start: "28000"
+    end:   "28999"
+
+  # Transaction type classification
+  # TODO: Update with actual account codes from your CoA
+  transaction_types:
+    trade:
+      accounts:   ["40100", "50200"]             # IC Revenue, IC COGS
+      workflow:   "implicit"
+      sla_hours:  72
+    non_trade:
+      accounts:   ["61200", "71000"]             # Management fees, IT charges
+      workflow:   "explicit"
+      sla_hours:  48
+    unclassified:
+      workflow:   "explicit"
+      sla_hours:  48
+
+# -----------------------------------------------------------------------------
+# MATCHING ENGINE — TIER CONFIGURATION
+# -----------------------------------------------------------------------------
+matching:
+  # Tier 1: tranid exact join (AICJEs only)
+  tier_1:
+    enabled:          true
+    description:      "Exact tranid match — Advanced IC Journal Entries"
+
+  # Tier 2: SHA-256 hash match (non-AICJE transactions)
+  tier_2:
+    enabled:          true
+    description:      "Composite hash match — period + entities + currency + amount"
+    amount_round_dp:  0                          # Round fxamount to 0dp for hash
+
+  # Tier 3: Tolerance match
+  tier_3:
+    enabled:          true
+    description:      "FX tolerance match — within threshold"
+    max_variance_usd: 100.00                     # Absolute USD threshold
+    max_variance_pct: 0.01                       # 1% percentage threshold
+    timing_gap_periods: 1                        # ±1 period allowed
+
+  # Tier 4: Subset sum (1-to-many transactions)
+  tier_4:
+    enabled:          true
+    description:      "Subset sum aggregation — one consolidated vs many itemised"
+    max_combination_depth: 5                     # Max lines to combine
+    tolerance_amount: 0.05                       # Rounding tolerance on sum
+
+  # Tier 5: LLM suggestion (orphans only)
+  tier_5:
+    enabled:          true
+    description:      "AI-assisted orphan counterparty suggestion"
+    min_confidence:   0.85                       # Below this → manual review
+    batch_orphans:    true                       # Always batch, never per-row
+
+  # Fuzzy matching (rapidfuzz) — used in Tier 3 for account name comparison
+  fuzzy:
+    levenshtein_threshold:  85                   # token_set_ratio minimum
+    jaro_winkler_weight:    0.30
+    levenshtein_weight:     0.50
+    ngram_weight:           0.20
+
+  # Initiator derivation
+  initiator:
+    primary_method:   "functional_currency"      # Match fxamount currency to entity
+    fallback_method:  "alphabetical"             # If primary fails, sort alphabetically
+    flag_fallback:    true                       # Flag JE drafts using fallback method
+
+# -----------------------------------------------------------------------------
+# EXCEPTION TAXONOMY
+# -----------------------------------------------------------------------------
+exceptions:
+  types:
+    - ORPHAN                                     # No counterpart found anywhere
+    - TIMING_GAP                                 # Found in ±1 period
+    - AMOUNT_MISMATCH                            # Match found, amounts differ
+    - ACCOUNT_MISMATCH                           # Match found, accounts differ
+    - CURRENCY_MISMATCH                          # Currencies differ between entities
+    - CSEG_INVALID                               # CSEG tag present but unrecognised
+    - PARTIAL_REVERSAL                           # Reversal leaves non-zero net
+    - OUT_OF_SCOPE                               # Entity not in APAC 5
+
+  priority_rules:
+    p1_threshold_usd: 500000                     # Above this → P1 immediately
+    p2_threshold_usd: 100000                     # Above this → P2
+    p3_threshold_usd: 0                          # Everything else → P3
+    aged_override_days: 30                       # Any exception >30 days → P1
+
+# -----------------------------------------------------------------------------
+# MATERIALITY AND FX
+# -----------------------------------------------------------------------------
+materiality:
+  variance_threshold_usd:   100.00              # Absolute dollar threshold
+  variance_threshold_pct:   0.01               # 1% percentage threshold
+  reporting_currency:       "USD"              # All variances converted to USD
+  fx_rounding_threshold:    5.00               # Below this = FX noise, not dispute
+
+# -----------------------------------------------------------------------------
+# LLM PROVIDER CASCADE
+# Providers attempted in order. Falls back to next if rate limited or unavailable.
+# -----------------------------------------------------------------------------
+llm:
+  primary:
+    provider:   "groq"
+    model:      "llama-3.3-70b-versatile"
+    rpm_limit:  30
+
+  secondary:
+    provider:   "deepseek"
+    model:      "deepseek-reasoner"
+    rpm_limit:  10
+
+  tertiary:
+    provider:   "gemini"
+    model:      "gemini-2.0-flash"
+    rpm_limit:  15
+
+  quaternary:
+    provider:   "openrouter"
+    model:      "qwen/qwen-2.5-72b-instruct"
+    rpm_limit:  60
+
+  settings:
+    temperature:          0.0                   # Zero temperature — deterministic
+    batch_orphans:        true                  # Batch all orphans into one prompt
+    max_reasoning_words:  15                    # DeepSeek reasoning strip limit
+    confidence_threshold: 0.85                  # Below this → MANUAL_REVIEW_QUEUE
+
+# -----------------------------------------------------------------------------
+# SCHEDULE
+# GitHub Actions cron schedule (UTC — Singapore is UTC+8)
+# -----------------------------------------------------------------------------
+schedule:
+  normal_period:
+    days:       "MON,THU"
+    time_utc:   "00:00"                         # 08:00 SGT
+  close_window:
+    start_day:  23                              # From day 23 of month
+    days:       "MON,TUE,WED,THU,FRI"
+    time_utc:   "00:00"
+
+# -----------------------------------------------------------------------------
+# ESCALATION AND GOVERNANCE
+# Delegation of Authority matrix per entity
+# -----------------------------------------------------------------------------
+escalation:
+  # SLA tiers for unposted JE drafts
+  je_posting_sla:
+    warning_hours:    24                        # Alert primary controller
+    escalation_hours: 48                        # Alert controller + backup
+    critical_hours:   72                        # Alert Head of Accounting + CFO
+    pipeline_stops:   false                     # NEVER hard stop — industry standard
+
+  # SLA tiers for unresolved exceptions
+  exception_sla:
+    tier_1_working_days: 2                      # Entity accountant
+    tier_2_working_days: 4                      # Entity controller
+    tier_3_working_days: 6                      # Head of Accounting
+
+  # Head of Accounting (Tier 3 escalation recipient)
+  head_of_accounting:
+    name:   "Kent"
+    email:  "kent@anthrotic.com"               # TODO: real email
+
+  # CFO (receives Tier 3 JE alerts and config staleness alerts)
+  cfo:
+    name:   "CFO"
+    email:  "cfo@anthrotic.com"                # TODO: real email
+
+# -----------------------------------------------------------------------------
+# GOVERNANCE — CONFIG STALENESS
+# Update last_verified_date every 90 days after reviewing all contacts
+# Sign the commit with GPG to prove human review (see setup checklist)
+# -----------------------------------------------------------------------------
+governance:
+  last_verified_date:       "2026-06-08"       # Update every 90 days
+  verification_commit_hash: ""                  # TODO: Fill after first GPG commit
+  system_owner_email:       "kent@anthrotic.com" # TODO: real email
+  executive_sponsor_email:  "cfo@anthrotic.com"  # TODO: real email
+
+  staleness_policy:
+    reminder_days:    75                        # Reminder to system owner
+    warning_days:     91                        # Warning to owner + CFO
+    failsafe_days:    105                       # Fail-safe routing to CFO only
+    pipeline_stops:   false                     # NEVER hard stop
+
+  # STP rate anomaly detection
+  stp_monitoring:
+    alert_if_drop_pct: 15                       # Alert if STP drops >15% vs last run
+    log_to_database:   true
+
+# -----------------------------------------------------------------------------
+# DATABASE
+# -----------------------------------------------------------------------------
+database:
+  provider:         "supabase"                  # supabase | postgresql | sqlite
+  region:           "aws-ap-southeast-1"        # Singapore — data residency
+  connection_port:  6543                        # Supavisor pooler — NOT 5432
+  ssl_mode:         "require"
+  pool_pre_ping:    true
+  pool_recycle:     300
+  pool_size:        5
+  max_overflow:     2
+
+  # Prototype fallback (if Supabase not yet configured)
+  sqlite_fallback:
+    enabled:        true                        # Set to false when Supabase ready
+    path:           "data/local/prototype.db"
+
+# -----------------------------------------------------------------------------
+# EMAIL AND NOTIFICATIONS
+# TODO: Production upgrade — move from personal Gmail to shared service account
+# recon-service@anthrotic.com — see setup checklist
+# -----------------------------------------------------------------------------
+notifications:
+  gmail:
+    sender:           "recon-pipeline@gmail.com"  # TODO: shared service account
+    netsuite_sender:  "netsuite@anthrotic.com"    # TODO: NetSuite export sender
+
+  telegram:
+    enabled:          false                     # Enable after entity accountants
+    bot_token_secret: "TELEGRAM_BOT_TOKEN"     # GitHub Secret name
+    fallback_on_email_failure: true
+
+  # Delivery log — track sent/bounced per alert
+  delivery_log:
+    enabled:          true
+    table:            "notification_log"
+
+# -----------------------------------------------------------------------------
+# OUTPUT
+# -----------------------------------------------------------------------------
+output:
+  excel:
+    filename_pattern: "recon_{period}_{date}.xlsx"  # e.g. recon_Jun2026_300626.xlsx
+    tab_0_name:       "Executive Summary"
+    tab_1_name:       "Matched Pairs"
+    tab_2_name:       "Exceptions"
+    tab_3_name:       "JE Drafts"
+    audit_tab_name:   "Audit Detail"             # Hidden tab for SOX deep-dive
+    freeze_panes:     "A4"                       # Lock header rows
+
+  google_sheets:
+    enabled:          false                      # Enable after GCP WIF setup
+    spreadsheet_id:   ""                         # TODO: Google Sheet ID
+    dashboard_tab:    "Dashboard"
+    exceptions_tab:   "Live Exceptions"
+
+  google_drive:
+    enabled:          false                      # Enable after GCP WIF setup
+    folder_id:        ""                         # TODO: Google Drive folder ID
+
+# -----------------------------------------------------------------------------
+# PERIOD LOCKING
+# Once a period is signed off, database trigger prevents any modification
+# Sign-off requires manual approval in GitHub Actions workflow
+# -----------------------------------------------------------------------------
+period_lock:
+  enabled:            true
+  requires_approval:  true                      # GitHub Actions manual approval
+  approver:           "Data-KentC"              # GitHub username
+
+# -----------------------------------------------------------------------------
+# NOTES FOR FUTURE CORPORATE DEPLOYMENT
+# -----------------------------------------------------------------------------
+# TODO BEFORE GO-LIVE:
+# 1. Confirm cseg_apac_ic exact string with NetSuite admin
+# 2. Confirm IC account code ranges from actual CoA
+# 3. Replace all placeholder emails with real contacts
+# 4. Set up shared Gmail service account (recon-service@company.com)
+# 5. Complete GCP WIF setup (see setup_checklist.md)
+# 6. Set OAuth consent screen to Production in GCP console
+# 7. Create Supabase project in ap-southeast-1 region
+# 8. Set google_sheets.enabled and google_drive.enabled to true
+# 9. Configure Telegram bot if using (optional)
+# 10. Set database.sqlite_fallback.enabled to false
+# 11. Set up GPG key on GitHub for signed commits
+# 12. Review and update last_verified_date above
+# =============================================================================

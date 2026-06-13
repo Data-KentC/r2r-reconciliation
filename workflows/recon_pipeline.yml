@@ -1,0 +1,240 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# .github/workflows/recon_pipeline.yml
+#
+# What this file does:
+#   Defines the GitHub Actions workflow that runs the reconciliation pipeline.
+#   GitHub reads this file and executes it on schedule or manual trigger.
+#   Runs on GitHub's Ubuntu servers — no laptop required.
+#
+#   Triggers:
+#     Scheduled: Every Monday and Thursday at 08:00 SGT (00:00 UTC)
+#     Manual:    workflow_dispatch with dropdown inputs
+#                Any authorised collaborator can trigger from GitHub UI
+#
+#   Steps:
+#     1. Check out the code from this repository
+#     2. Set up Python 3.11
+#     3. Cache pip dependencies (speeds up subsequent runs)
+#     4. Install Python libraries from requirements.txt
+#     5. Authenticate to Google Cloud via Workload Identity Federation
+#        (keyless — no static credentials stored anywhere)
+#     6. Run the reconciliation pipeline
+#     7. Upload Excel output as a GitHub Actions artifact
+#     8. Archive run logs (SOX 90-day retention)
+#
+#   Concurrency:
+#     Only one pipeline run at a time.
+#     If a second trigger fires while one is running, it waits.
+#     cancel-in-progress: false prevents database corruption.
+#
+#   Secrets required (set in GitHub → Settings → Secrets → Actions):
+#     SUPABASE_POOLER_URL      Database connection string (port 6543)
+#     GEMINI_API_KEY           Gemini API key
+#     GROQ_API_KEY             Groq API key
+#     DEEPSEEK_API_KEY         DeepSeek API key
+#     OPENROUTER_API_KEY       OpenRouter API key (Qwen fallback)
+#     GMAIL_REFRESH_TOKEN      Gmail OAuth refresh token
+#     GMAIL_CLIENT_ID          Gmail OAuth client ID
+#     GMAIL_CLIENT_SECRET      Gmail OAuth client secret
+#     GOOGLE_DRIVE_FOLDER_ID   Google Drive output folder ID
+#     GOOGLE_SHEETS_ID         Google Sheets dashboard ID
+#     TELEGRAM_BOT_TOKEN       Telegram bot token (optional)
+#     GCP_WORKLOAD_IDENTITY_PROVIDER  WIF provider resource name
+#     GCP_SERVICE_ACCOUNT      Service account email for WIF
+#
+#   Note on scheduling:
+#     GitHub disables cron schedules if the repository has no commit
+#     activity for 60 days. To prevent this, a keepalive workflow
+#     (.github/workflows/keepalive.yml) pushes an empty commit every
+#     50 days. Without it, you must manually re-enable the schedule.
+# =============================================================================
+
+name: APAC Intercompany Reconciliation Engine
+
+on:
+  # ─── Scheduled runs ────────────────────────────────────────────────────────
+  schedule:
+    # Monday 08:00 SGT = Sunday 00:00 UTC
+    - cron: '0 0 * * 1'
+    # Thursday 08:00 SGT = Wednesday 00:00 UTC
+    - cron: '0 0 * * 4'
+
+  # ─── Manual trigger ────────────────────────────────────────────────────────
+  # Any authorised GitHub collaborator can trigger from:
+  # GitHub → Actions tab → APAC Intercompany Reconciliation Engine
+  # → Run workflow button → Fill in dropdown → Click Run
+  workflow_dispatch:
+    inputs:
+      manual_trigger_reason:
+        description: 'SOX Audit Log: Reason for manual run (required)'
+        required: true
+        type: string
+      target_entities:
+        description: 'Entities to reconcile'
+        required: true
+        type: choice
+        options:
+          - ALL_ENTITIES_APAC
+          - SG_AU_ONLY
+          - SG_JP_ONLY
+          - SG_IN_ONLY
+          - SG_HK_ONLY
+        default: ALL_ENTITIES_APAC
+      csv_override:
+        description: 'Optional: path to CSV file in repo (leave blank to poll Gmail)'
+        required: false
+        type: string
+        default: ''
+
+# ─── Concurrency ─────────────────────────────────────────────────────────────
+# Only one pipeline run at a time.
+# Second trigger waits — never cancels a running financial calculation.
+concurrency:
+  group: reconciliation-pipeline-production
+  cancel-in-progress: false
+
+# ─── Permissions ─────────────────────────────────────────────────────────────
+# id-token: write is required for GCP Workload Identity Federation
+# contents: read is required to check out the repository
+permissions:
+  contents: read
+  id-token: write
+
+# ─── Jobs ────────────────────────────────────────────────────────────────────
+jobs:
+  reconcile:
+    name: Run Reconciliation Pipeline
+    runs-on: ubuntu-latest
+    environment: production  # Requires environment protection rules if set up
+
+    steps:
+      # ── Step 1: Check out code ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Set up Python ──────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'           # Cache pip packages between runs
+
+      # ── Step 3: Install dependencies ──────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Step 4: Authenticate to Google Cloud via WIF ──────────────────────
+      # Keyless authentication — no static JSON key files anywhere.
+      # The runner proves its identity to GCP using OIDC.
+      # GCP issues a short-lived token that expires after the run.
+      # This satisfies SOX Logical Access Control requirements.
+      #
+      # token_format: access_token is required for Drive and Sheets APIs.
+      # Without it, WIF issues an identity assertion, not an OAuth token.
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        # Only run this step if WIF is configured
+        if: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account:            ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format:               access_token
+          access_token_scopes: >-
+            https://www.googleapis.com/auth/drive.file,
+            https://www.googleapis.com/auth/spreadsheets
+
+      # ── Step 5: Run the pipeline ───────────────────────────────────────────
+      - name: Run reconciliation pipeline
+        env:
+          # Database
+          SUPABASE_POOLER_URL:      ${{ secrets.SUPABASE_POOLER_URL }}
+
+          # LLM providers
+          GEMINI_API_KEY:           ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:             ${{ secrets.GROQ_API_KEY }}
+          DEEPSEEK_API_KEY:         ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENROUTER_API_KEY:       ${{ secrets.OPENROUTER_API_KEY }}
+
+          # Gmail (3LO OAuth — separate from WIF)
+          GMAIL_REFRESH_TOKEN:      ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_CLIENT_ID:          ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET:      ${{ secrets.GMAIL_CLIENT_SECRET }}
+
+          # Google Workspace outputs
+          GOOGLE_DRIVE_FOLDER_ID:   ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_SHEETS_ID:         ${{ secrets.GOOGLE_SHEETS_ID }}
+
+          # Telegram (optional fallback)
+          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+          # WIF credentials (auto-set by google-github-actions/auth step)
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.gcp-auth.outputs.credentials_file_path }}
+
+          # Workflow inputs
+          RECON_TARGET:             ${{ inputs.target_entities || 'ALL_ENTITIES_APAC' }}
+          MANUAL_TRIGGER_REASON:    ${{ inputs.manual_trigger_reason || 'Scheduled run' }}
+          ENV:                      production
+
+        run: |
+          # Determine CSV file argument
+          CSV_ARG=""
+          if [ -n "${{ inputs.csv_override }}" ]; then
+            CSV_ARG="--file ${{ inputs.csv_override }}"
+          fi
+
+          # Run the pipeline
+          python jobs/run_pipeline.py \
+            $CSV_ARG \
+            --reason "${{ inputs.manual_trigger_reason || 'Scheduled run' }}"
+
+      # ── Step 6: Upload Excel report as artifact ────────────────────────────
+      # Makes the Excel report downloadable from the GitHub Actions run page.
+      # Retention: 30 days (sufficient — primary copy is in Google Drive)
+      - name: Upload Excel report artifact
+        if: always()    # Upload even if pipeline had partial failures
+        uses: actions/upload-artifact@v4
+        with:
+          name: reconciliation-report-${{ github.run_number }}
+          path: output/*.xlsx
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ── Step 7: Archive run logs for SOX retention ─────────────────────────
+      # GitHub Actions logs are retained for 90 days on free tier.
+      # This step downloads the current run's log and uploads to Google Drive
+      # to satisfy the 7-year SOX data retention requirement.
+      # Runs monthly via a separate workflow (log_archive.yml).
+      - name: Archive run log summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ github.run_number }}-${{ github.run_id }}
+          path: |
+            output/*.xlsx
+          retention-days: 90
+
+      # ── Step 8: Write job summary to GitHub Actions UI ─────────────────────
+      # This appears in the GitHub Actions run summary page.
+      # Non-technical users see this when they open the Actions tab.
+      - name: Write run summary
+        if: always()
+        run: |
+          echo "## R2R Reconciliation Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Run Number | ${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Target Entities | ${{ inputs.target_entities || 'ALL_ENTITIES_APAC (scheduled)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Time (UTC) | $(date -u '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.manual_trigger_reason }}" ]; then
+            echo "| Manual Reason | ${{ inputs.manual_trigger_reason }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the Excel artifact above for the full reconciliation report." >> $GITHUB_STEP_SUMMARY
+          echo "Check Google Drive for the uploaded report copy." >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,103 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# .github/workflows/generate_test_data.yml
+#
+# What this file does:
+#   One-time workflow to generate synthetic test data and commit it
+#   to the repository so the main pipeline can use it for testing.
+#
+#   Run this ONCE before running the main pipeline test.
+#   After the synthetic CSV is committed, this workflow is no longer needed
+#   but can be kept for regenerating test data if the schema changes.
+#
+# How to run:
+#   GitHub → Actions tab → Generate Synthetic Test Data → Run workflow
+# =============================================================================
+
+name: Generate Synthetic Test Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_message:
+        description: 'Commit message for synthetic data'
+        required: false
+        type: string
+        default: 'Add synthetic test data — 15 edge cases'
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    name: Generate and commit synthetic data
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install pandas faker
+
+      - name: Generate synthetic data
+        run: python tests/synthetic/generate_synthetic.py
+
+      - name: Verify output
+        run: |
+          if [ -f "data/synthetic/synthetic_gl_jun2026.csv" ]; then
+            ROWS=$(tail -n +2 data/synthetic/synthetic_gl_jun2026.csv | wc -l)
+            echo "Generated $ROWS data rows"
+            echo "First 3 rows:"
+            head -4 data/synthetic/synthetic_gl_jun2026.csv
+          else
+            echo "ERROR: synthetic_gl_jun2026.csv not found"
+            exit 1
+          fi
+
+      - name: Commit synthetic data
+        run: |
+          git config user.name  "R2R Test Data Bot"
+          git config user.email "actions@github.com"
+          git add data/synthetic/synthetic_gl_jun2026.csv
+          if git diff --staged --quiet; then
+            echo "No changes to synthetic data"
+          else
+            git commit -m "${{ inputs.commit_message }}"
+            git push
+            echo "Synthetic data committed successfully"
+          fi
+
+      - name: Write summary
+        run: |
+          echo "## Synthetic Data Generated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f "data/synthetic/synthetic_gl_jun2026.csv" ]; then
+            ROWS=$(tail -n +2 data/synthetic/synthetic_gl_jun2026.csv | wc -l)
+            echo "✅ Generated $ROWS rows covering 15 edge cases" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Edge cases covered:" >> $GITHUB_STEP_SUMMARY
+            echo "- Tier 1: tranid exact match (AICJE)" >> $GITHUB_STEP_SUMMARY
+            echo "- Tier 2: SHA-256 hash match" >> $GITHUB_STEP_SUMMARY
+            echo "- SHA-256 collision detection" >> $GITHUB_STEP_SUMMARY
+            echo "- Tier 3: FX tolerance match" >> $GITHUB_STEP_SUMMARY
+            echo "- Amount outside tolerance → exception" >> $GITHUB_STEP_SUMMARY
+            echo "- Timing gap across periods" >> $GITHUB_STEP_SUMMARY
+            echo "- Tier 4: 1-to-many subset sum" >> $GITHUB_STEP_SUMMARY
+            echo "- Full reversal → dropped" >> $GITHUB_STEP_SUMMARY
+            echo "- Partial reversal → net amount" >> $GITHUB_STEP_SUMMARY
+            echo "- Missing CSEG, valid account" >> $GITHUB_STEP_SUMMARY
+            echo "- Missing CSEG, wrong account → memo" >> $GITHUB_STEP_SUMMARY
+            echo "- Currency mismatch" >> $GITHUB_STEP_SUMMARY
+            echo "- True orphan → Tier 5 LLM" >> $GITHUB_STEP_SUMMARY
+            echo "- Null fxamount → null guard" >> $GITHUB_STEP_SUMMARY
+            echo "- Out-of-scope entity → quarantine" >> $GITHUB_STEP_SUMMARY
+          fi

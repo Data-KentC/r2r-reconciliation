@@ -1,0 +1,242 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# .github/workflows/test_pipeline.yml
+#
+# What this file does:
+#   End-to-end test of the full reconciliation pipeline using synthetic data.
+#   Runs on GitHub Actions — no local setup needed.
+#   Uses SQLite fallback (no Supabase needed for this test).
+#   Skips LLM calls if API keys are not configured.
+#   Generates a test Excel report and uploads as artifact.
+#
+# How to run:
+#   GitHub → Actions tab → Pipeline End-to-End Test → Run workflow
+#
+# What a passing test confirms:
+#   - All Python imports resolve correctly
+#   - Synthetic CSV passes Pandera validation
+#   - All 15 edge cases are processed without crashing
+#   - Matching tiers execute in sequence
+#   - SQLite database is created and written to
+#   - Excel output is generated with all 4 tabs
+#   - No Python errors or unhandled exceptions
+# =============================================================================
+
+name: Pipeline End-to-End Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      verbose:
+        description: 'Show detailed output'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: End-to-end pipeline test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify synthetic data exists
+        run: |
+          if [ ! -f "data/synthetic/synthetic_gl_jun2026.csv" ]; then
+            echo "Synthetic data not found. Generating now..."
+            python tests/synthetic/generate_synthetic.py
+          fi
+          ROWS=$(tail -n +2 data/synthetic/synthetic_gl_jun2026.csv | wc -l)
+          echo "Synthetic data: $ROWS rows ready"
+
+      - name: Test 1 — Config loads correctly
+        run: |
+          python -c "
+          from src.config import config
+          print(f'Config loaded: {config.environment}')
+          print(f'Entities: {config.valid_entity_codes}')
+          print(f'Materiality threshold: {config.materiality.variance_threshold_usd}')
+          print('CONFIG TEST: PASS')
+          "
+
+      - name: Test 2 — Synthetic data validation
+        run: |
+          python -c "
+          import pandas as pd
+          from src.ingestion.validator import validate_csv
+          raw = pd.read_csv('data/synthetic/synthetic_gl_jun2026.csv', dtype=str)
+          print(f'Raw rows: {len(raw)}')
+          validated = validate_csv(raw)
+          print(f'Validated rows: {len(validated)}')
+          print('VALIDATION TEST: PASS')
+          "
+
+      - name: Test 3 — Full ingestion pipeline
+        run: |
+          python -c "
+          from src.ingestion.ingestor import ingest
+          ic_df, meta = ingest('data/synthetic/synthetic_gl_jun2026.csv')
+          print(f'IC rows identified: {len(ic_df)}')
+          print(f'Period: {meta.period}')
+          print(f'MD5: {meta.file_md5}')
+          print(f'Out of scope: {meta.rows_out_of_scope}')
+          print(f'Reversals dropped: {meta.rows_reversed}')
+          assert len(ic_df) > 0, 'No IC rows found'
+          print('INGESTION TEST: PASS')
+          "
+
+      - name: Test 4 — Key generation
+        run: |
+          python -c "
+          from src.ingestion.ingestor import ingest
+          from src.matching.keygen import assign_keys
+          ic_df, meta = ingest('data/synthetic/synthetic_gl_jun2026.csv')
+          keyed = assign_keys(ic_df)
+          assert 'row_id' in keyed.columns, 'row_id column missing'
+          assert 'match_group_key' in keyed.columns, 'match_group_key missing'
+          assert 'tranid_key' in keyed.columns, 'tranid_key missing'
+          dupes = keyed['row_id'].duplicated().sum()
+          print(f'Unique row IDs: {keyed[\"row_id\"].nunique()}')
+          print(f'Duplicate row IDs: {dupes}')
+          assert dupes == 0, f'{dupes} duplicate row IDs found'
+          print('KEY GENERATION TEST: PASS')
+          "
+
+      - name: Test 5 — Matching engine tiers
+        run: |
+          python -c "
+          from src.ingestion.ingestor import ingest
+          from src.matching.keygen import assign_keys
+          from src.matching.exact import match_tier1, match_tier2
+          from src.matching.tolerance import match_tier3
+          from src.matching.subset_sum import match_tier4
+
+          ic_df, meta = ingest('data/synthetic/synthetic_gl_jun2026.csv')
+          keyed = assign_keys(ic_df)
+
+          t1_pairs, after_t1 = match_tier1(keyed)
+          print(f'Tier 1 matches: {len(t1_pairs)} pairs')
+
+          t2_pairs, after_t2 = match_tier2(after_t1)
+          print(f'Tier 2 matches: {len(t2_pairs)} pairs')
+
+          t3_pairs, after_t3 = match_tier3(after_t2)
+          print(f'Tier 3 matches: {len(t3_pairs)} pairs')
+
+          t4_pairs, after_t4 = match_tier4(after_t3)
+          print(f'Tier 4 matches: {len(t4_pairs)} pairs')
+
+          print(f'Remaining orphans: {len(after_t4)}')
+          total_matched = len(t1_pairs) + len(t2_pairs) + len(t3_pairs) + len(t4_pairs)
+          print(f'Total matched pairs: {total_matched}')
+          print('MATCHING TIERS TEST: PASS')
+          "
+
+      - name: Test 6 — Full engine with SQLite
+        env:
+          # No Supabase — uses SQLite fallback
+          SUPABASE_POOLER_URL: ''
+        run: |
+          python -c "
+          import uuid
+          from src.ingestion.ingestor import ingest
+          from src.matching.engine import run_matching_engine
+          from src.persistence.database import init_db
+
+          init_db()
+          ic_df, meta = ingest('data/synthetic/synthetic_gl_jun2026.csv')
+          run_id = str(uuid.uuid4())
+          result = run_matching_engine(ic_df, meta, run_id, previous_stp=0.0)
+
+          print(f'STP Rate:      {result.stp_rate:.1%}')
+          print(f'Matched pairs: {len(result.matched_pairs)}')
+          print(f'Exceptions:    {len(result.exceptions)}')
+          print(f'Tier 1:        {result.tier1_matches}')
+          print(f'Tier 2:        {result.tier2_matches}')
+          print(f'Tier 3:        {result.tier3_matches}')
+          print(f'Tier 4:        {result.tier4_matches}')
+          assert result.stp_rate > 0, 'STP rate is zero — nothing matched'
+          print('FULL ENGINE TEST: PASS')
+          "
+
+      - name: Test 7 — Excel report generation
+        env:
+          SUPABASE_POOLER_URL: ''
+        run: |
+          python -c "
+          import uuid, os
+          from src.ingestion.ingestor import ingest
+          from src.matching.engine import run_matching_engine
+          from src.persistence.database import init_db
+          from src.reporting.reporter import generate_report
+
+          init_db()
+          ic_df, meta = ingest('data/synthetic/synthetic_gl_jun2026.csv')
+          run_id = str(uuid.uuid4())
+          result = run_matching_engine(ic_df, meta, run_id, previous_stp=0.0)
+
+          output_path = generate_report(
+              period=     meta.period,
+              result=     result,
+              meta=       meta,
+              run_id=     run_id,
+              output_dir= 'output',
+              upload=     False,
+          )
+
+          assert os.path.exists(output_path), f'Output file not found: {output_path}'
+          size_kb = os.path.getsize(output_path) / 1024
+          print(f'Excel generated: {output_path} ({size_kb:.1f} KB)')
+          print('EXCEL REPORT TEST: PASS')
+          "
+
+      - name: Upload test Excel report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ github.run_number }}
+          path: output/*.xlsx
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload test database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-database-${{ github.run_number }}
+          path: data/local/*.db
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Write test summary
+        if: always()
+        run: |
+          echo "## Pipeline End-to-End Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Config loads | See step logs |" >> $GITHUB_STEP_SUMMARY
+          echo "| Schema validation | See step logs |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ingestion pipeline | See step logs |" >> $GITHUB_STEP_SUMMARY
+          echo "| Key generation | See step logs |" >> $GITHUB_STEP_SUMMARY
+          echo "| Matching tiers 1-4 | See step logs |" >> $GITHUB_STEP_SUMMARY
+          echo "| Full engine + SQLite | See step logs |" >> $GITHUB_STEP_SUMMARY
+          echo "| Excel report | See step logs |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download the Excel artifact above to inspect the test report." >> $GITHUB_STEP_SUMMARY

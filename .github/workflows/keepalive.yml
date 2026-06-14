@@ -1,0 +1,113 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# .github/workflows/keepalive.yml
+#
+# What this file does:
+#   Prevents GitHub from silently disabling the reconciliation pipeline
+#   schedule due to repository inactivity.
+#
+#   The problem it solves:
+#     GitHub automatically disables scheduled workflows (cron jobs) if
+#     the repository has no Git commit activity for 60 consecutive days.
+#     A stable, working pipeline may go weeks without code changes.
+#     On day 61, GitHub silently switches off Mon/Thu 08:00 SGT runs.
+#     The reconciliation stops. Nobody is alerted. SOX control fails.
+#
+#   The solution:
+#     This workflow runs every 50 days and pushes an empty commit to
+#     the repository. GitHub sees activity and resets its 60-day clock.
+#     The primary pipeline schedule stays active indefinitely.
+#
+#   The empty commit:
+#     Contains only a timestamp update to a file called
+#     .github/keepalive_timestamp. This file has no effect on any code.
+#     The commit message records the exact time for audit purposes.
+#
+#   Why 50 days (not 59):
+#     10-day buffer to account for weekends, GitHub infrastructure
+#     delays, and any edge cases in GitHub's inactivity detection.
+#     Conservative is safer for a financial control system.
+#
+#   Note:
+#     If you intentionally take the system offline for more than 50 days,
+#     disable this workflow too. Re-enable both when you want the system
+#     running again.
+# =============================================================================
+
+name: Repository Keepalive
+
+on:
+  schedule:
+    # Every 50 days at 01:00 UTC
+    # This is offset from the main pipeline (00:00 UTC) to avoid overlap
+    - cron: '0 1 */50 * *'
+
+  # Allow manual trigger in case the schedule itself gets disabled
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual keepalive trigger'
+        required: false
+        type: string
+        default: 'Manual keepalive — reset 60-day inactivity clock'
+
+permissions:
+  contents: write    # Required to push the empty commit
+
+jobs:
+  keepalive:
+    name: Push keepalive commit
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Step 1: Check out with write access ────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Use the default GITHUB_TOKEN — no extra secrets needed
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Step 2: Configure git identity ─────────────────────────────────────
+      - name: Configure git identity
+        run: |
+          git config user.name  "R2R Keepalive Bot"
+          git config user.email "actions@github.com"
+
+      # ── Step 3: Update keepalive timestamp ─────────────────────────────────
+      - name: Update keepalive timestamp
+        run: |
+          mkdir -p .github
+          echo "Last keepalive: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" \
+            > .github/keepalive_timestamp
+          echo "Purpose: Prevents GitHub from disabling scheduled workflows" \
+            >> .github/keepalive_timestamp
+          echo "Next keepalive due: $(date -u -d '+50 days' '+%Y-%m-%d' 2>/dev/null || date -u '+%Y-%m-%d')" \
+            >> .github/keepalive_timestamp
+
+      # ── Step 4: Commit and push ─────────────────────────────────────────────
+      - name: Commit keepalive timestamp
+        run: |
+          git add .github/keepalive_timestamp
+
+          # Only commit if there are actual changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit — timestamp unchanged"
+          else
+            git commit -m "chore: keepalive $(date -u '+%Y-%m-%d') — reset activity clock"
+            git push
+            echo "Keepalive commit pushed successfully"
+          fi
+
+      # ── Step 5: Write summary ───────────────────────────────────────────────
+      - name: Write summary
+        run: |
+          echo "## Keepalive Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Repository activity clock reset." >> $GITHUB_STEP_SUMMARY
+          echo "Scheduled reconciliation pipeline will continue running." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Time | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Next keepalive | In 50 days |" >> $GITHUB_STEP_SUMMARY
+          echo "| Primary pipeline | Still active ✅ |" >> $GITHUB_STEP_SUMMARY

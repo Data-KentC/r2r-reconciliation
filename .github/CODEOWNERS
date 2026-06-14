@@ -1,0 +1,64 @@
+# =============================================================================
+# R2R INTERCOMPANY RECONCILIATION ENGINE
+# .github/CODEOWNERS
+#
+# What this file does:
+#   Enforces mandatory Pull Request review for financially significant files.
+#   When anyone modifies a listed file, GitHub automatically requests a
+#   review from the designated owner before the change can be merged.
+#
+#   Why this matters for SOX:
+#     config.yaml contains materiality thresholds, entity contacts, and
+#     account code ranges that directly affect financial reporting.
+#     Changing these parameters without review is equivalent to modifying
+#     a financial system without change management approval.
+#     CODEOWNERS enforces Segregation of Duties — the person making the
+#     change cannot be the sole approver.
+#
+#   How it works:
+#     Any Pull Request that modifies a listed file triggers an automatic
+#     review request to the listed GitHub username.
+#     The PR cannot be merged until that person approves it.
+#     This creates an immutable audit trail in GitHub of:
+#       - Who proposed the change
+#       - Who reviewed and approved it
+#       - Exactly what changed (line-by-line diff)
+#       - When it was merged
+#
+#   To update the reviewer:
+#     Replace @Data-KentC below with the GitHub username of the
+#     designated Financial Controller or Compliance Officer.
+#     This file itself requires a PR to change — enforcing the control.
+#
+#   Format:
+#     <file pattern>    <GitHub username(s)>
+#     Patterns use gitignore syntax.
+#     Multiple owners: @username1 @username2
+# =============================================================================
+
+# ─── Financially significant configuration ──────────────────────────────────
+# Any change to config.yaml requires review.
+# config.yaml contains: materiality thresholds, entity contacts,
+# account code ranges, LLM settings, escalation SLAs.
+config.yaml                   @Data-KentC
+
+# ─── Matching engine logic ───────────────────────────────────────────────────
+# Changes to matching tiers require review — they affect STP rate and
+# which transactions are classified as exceptions vs matched.
+src/matching/exact.py         @Data-KentC
+src/matching/tolerance.py     @Data-KentC
+src/matching/subset_sum.py    @Data-KentC
+src/matching/engine.py        @Data-KentC
+
+# ─── Database schema ─────────────────────────────────────────────────────────
+# Schema changes affect audit trail and data integrity.
+src/persistence/models.py     @Data-KentC
+src/persistence/database.py   @Data-KentC
+
+# ─── GitHub Actions workflows ────────────────────────────────────────────────
+# Workflow changes could affect scheduling, permissions, or secret access.
+.github/workflows/            @Data-KentC
+
+# ─── This file itself ────────────────────────────────────────────────────────
+# Changing CODEOWNERS requires approval — prevents bypassing the control.
+.github/CODEOWNERS            @Data-KentC

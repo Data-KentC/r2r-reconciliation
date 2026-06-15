@@ -76,8 +76,6 @@ faker==25.2.0                  # Generate realistic fake financial data
 # -----------------------------------------------------------------------------
 python-dateutil==2.9.0         # Date parsing — handles NetSuite date formats
 pytz==2024.1                   # Timezone handling — SGT/UTC conversion
-hashlib-compat==1.0.0          # SHA-256 match key generation
-                               # (hashlib is built-in but this ensures compat)
 
 # -----------------------------------------------------------------------------
 # DEVELOPMENT AND TESTING — Not used in production pipeline

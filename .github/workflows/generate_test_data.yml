@@ -67,7 +67,7 @@ jobs:
         run: |
           git config user.name  "R2R Test Data Bot"
           git config user.email "actions@github.com"
-          git add data/synthetic/synthetic_gl_jun2026.csv
+          git add -f data/synthetic/synthetic_gl_jun2026.csv
           if git diff --staged --quiet; then
             echo "No changes to synthetic data"
           else

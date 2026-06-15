@@ -1,1 +1,1 @@
-# Jobs — pipeline entry points
+# Jobs - pipeline entry points

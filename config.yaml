@@ -306,7 +306,7 @@ database:
   # Prototype fallback (if Supabase not yet configured)
   sqlite_fallback:
     enabled:        true                        # Set to false when Supabase ready
-    path:           "data/local/prototype.db"
+    path:           "data/synthetic/prototype.db"
 
 # -----------------------------------------------------------------------------
 # EMAIL AND NOTIFICATIONS

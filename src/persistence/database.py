@@ -165,6 +165,7 @@ def get_engine() -> Engine:
 # Context manager for safe database sessions
 # -----------------------------------------------------------------------------
 
+@contextmanager
 def get_session() -> Generator[Session, None, None]:
     """
     Context manager that provides a database session.

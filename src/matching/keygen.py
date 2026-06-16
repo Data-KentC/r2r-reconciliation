@@ -110,18 +110,33 @@ def _round_fxamount(fxamount) -> int:
 # Unique per row — never collides
 # -----------------------------------------------------------------------------
 
-def _generate_row_id(internalid: str, local_entity: str) -> str:
+def _generate_row_id(
+    internalid:         str,
+    local_entity:        str,
+    linesequencenumber:  str,
+) -> str:
     """
     Generates a unique row identity key.
 
-    Formula: SHA-256(internalid + "|" + local_entity)
+    Formula: SHA-256(internalid + "|" + local_entity + "|" + linesequencenumber)
 
     Why this combination:
-        internalid alone is not globally unique — ANTH-SG and ANTH-JP
-        can have the same internalid for different transactions.
-        Adding local_entity guarantees uniqueness across all entities.
+        internalid alone is not unique — every line of a multi-line
+        journal entry shares the SAME internalid (e.g. a 4-line AICJE
+        has one internalid across all 4 debit/credit lines).
+        internalid + local_entity is still not unique for the same
+        reason — multiple lines of one JE belong to the same entity.
+        Adding linesequencenumber guarantees uniqueness per GL line,
+        which is what row_id is meant to identify (one row = one line).
+        local_entity is still included so the same internalid used by
+        two different entities (rare, but possible in NetSuite) never
+        collides either.
     """
-    value = f"{str(internalid).strip()}|{str(local_entity).strip()}"
+    value = (
+        f"{str(internalid).strip()}"
+        f"|{str(local_entity).strip()}"
+        f"|{str(linesequencenumber).strip()}"
+    )
     return _sha256(value)
 
 
@@ -202,6 +217,7 @@ def assign_keys(ic_df: pd.DataFrame) -> pd.DataFrame:
         lambda row: _generate_row_id(
             row[NS.internal_id],
             row["local_entity"],
+            row[NS.line_sequence],
         ),
         axis=1,
     )

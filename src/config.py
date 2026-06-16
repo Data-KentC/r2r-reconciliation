@@ -119,6 +119,12 @@ class MaterialityConfig:
 
 
 @dataclass
+class ExceptionsConfig:
+    types:           List[str]
+    priority_rules:  Dict[str, float]
+
+
+@dataclass
 class LLMProviderConfig:
     provider:  str
     model:     str
@@ -196,6 +202,7 @@ class AppConfig:
     netsuite:     NetSuiteConfig
     matching:     MatchingConfig
     materiality:  MaterialityConfig
+    exceptions:   ExceptionsConfig
     llm:          LLMConfig
     escalation:   EscalationConfig
     governance:   GovernanceConfig
@@ -285,6 +292,13 @@ def _parse_config(raw: dict) -> AppConfig:
             fx_rounding_threshold=  mat["fx_rounding_threshold"],
         )
 
+        # --- Exceptions taxonomy and priority rules ---
+        exc_raw = raw["exceptions"]
+        exceptions = ExceptionsConfig(
+            types=          exc_raw["types"],
+            priority_rules= exc_raw["priority_rules"],
+        )
+
         # --- LLM ---
         llm_raw = raw["llm"]
         llm = LLMConfig(
@@ -358,6 +372,7 @@ def _parse_config(raw: dict) -> AppConfig:
             netsuite=     netsuite,
             matching=     matching,
             materiality=  materiality,
+            exceptions=   exceptions,
             llm=          llm,
             escalation=   escalation,
             governance=   governance,

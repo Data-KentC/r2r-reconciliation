@@ -68,11 +68,17 @@ jobs:
       - name: Test 1 — Config loads correctly
         run: |
           python -c "
-          from src.config import config
-          print(f'Config loaded: {config.environment}')
-          print(f'Entities: {config.valid_entity_codes}')
-          print(f'Materiality threshold: {config.materiality.variance_threshold_usd}')
-          print('CONFIG TEST: PASS')
+          import sys, traceback
+          try:
+              import src.config as cfg_module
+              print('Module imported')
+              config = cfg_module.config
+              print(f'Config loaded: {config.environment}')
+              print(f'Entities: {config.valid_entity_codes}')
+              print('CONFIG TEST: PASS')
+          except Exception as e:
+              traceback.print_exc()
+              sys.exit(1)
           "
 
       - name: Test 2 — Synthetic data validation

@@ -185,8 +185,7 @@ def _classify_exceptions(
             tran_date = datetime.strptime(
                 str(tran_date_str).strip()[:10], "%Y-%m-%d"
             ).date()
--           return (today - tran_date).days
-+           return max(0, (today - tran_date).days)
+             return max(0, (today - tran_date).days)
         except Exception:
             return 0
 
@@ -401,14 +400,14 @@ def run_matching_engine(
     priority_by_type = {}
     if len(exceptions_df) > 0:
         exc_counts = exceptions_df["exception_type"].value_counts().to_dict()
-+       priority_by_type = (
-+           exceptions_df.groupby("exception_type")["priority"]
-+           .value_counts()
-+           .unstack(fill_value=0)
-+           .reindex(columns=["P1", "P2", "P3"], fill_value=0)
-+           .apply(lambda r: f"P1:{r['P1']} / P2:{r['P2']} / P3:{r['P3']}", axis=1)
-+           .to_dict()
-+       )
+        priority_by_type = (
+            exceptions_df.groupby("exception_type")["priority"]
+            .value_counts()
+            .unstack(fill_value=0)
+            .reindex(columns=["P1", "P2", "P3"], fill_value=0)
+            .apply(lambda r: f"P1:{r['P1']} / P2:{r['P2']} / P3:{r['P3']}", axis=1)
+            .to_dict()
+        )
     
     llm_suggested = 0
     if len(enriched_orphans) > 0:

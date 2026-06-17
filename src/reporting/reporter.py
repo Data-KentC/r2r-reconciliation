@@ -325,6 +325,11 @@ def generate_report(
         exceptions_df = result.exceptions
         print("[REPORTER] Using in-memory exceptions (database not yet written)")
 
+    if (je_drafts_df is None or len(je_drafts_df) == 0) and \
+       result.je_drafts is not None and len(result.je_drafts) > 0:
+        je_drafts_df = result.je_drafts
+        print("[REPORTER] Using in-memory JE drafts (database not yet written)")
+           
     # Build entity pair summary for Tab 0
     entity_pairs = _build_entity_pair_summary(matched_df, exceptions_df)
 
@@ -353,7 +358,7 @@ def generate_report(
         f"\n  Local:  {output_path}"
         f"\n  Drive:  {drive_url or 'Not uploaded'}"
     )
-
+          
     return output_path
 
 

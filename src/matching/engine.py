@@ -184,7 +184,8 @@ def _classify_exceptions(
             tran_date = datetime.strptime(
                 str(tran_date_str).strip()[:10], "%Y-%m-%d"
             ).date()
-            return (today - tran_date).days
+-           return (today - tran_date).days
++           return max(0, (today - tran_date).days)
         except Exception:
             return 0
 

@@ -41,6 +41,8 @@ class EntityConfig:
     backup_controller:   str
     telegram_chat_id:    str
     active:              bool
+    fx_suspense_account:         str = "TODO_FX_SUSPENSE"
+    in_transit_clearing_account: str = "TODO_IN_TRANSIT_CLEARING"
 
 
 @dataclass
@@ -246,6 +248,8 @@ def _parse_config(raw: dict) -> AppConfig:
                 backup_controller=   e["backup_controller"],
                 telegram_chat_id=    e.get("telegram_chat_id", ""),
                 active=              e.get("active", True),
+                fx_suspense_account=         e.get("fx_suspense_account", "TODO_FX_SUSPENSE"),
+                in_transit_clearing_account= e.get("in_transit_clearing_account", "TODO_IN_TRANSIT_CLEARING"),
             )
 
         # --- NetSuite ---

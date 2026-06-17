@@ -305,15 +305,17 @@ def _build_tab0(
     row += 1
 
     exc_data = [
-        ("ORPHAN",            result.orphans,             "P1/P2/P3"),
-        ("TIMING_GAP",        result.timing_gaps,          "P2/P3"),
-        ("AMOUNT_MISMATCH",   result.amount_mismatches,    "P1/P2/P3"),
-        ("ACCOUNT_MISMATCH",  result.account_mismatches,   "P3"),
-        ("CURRENCY_MISMATCH", result.currency_mismatches,  "P1"),
-        ("OTHER",             result.other_exceptions,     "P3"),
+        ("ORPHAN",            result.orphans),
+        ("TIMING_GAP",        result.timing_gaps),
+        ("AMOUNT_MISMATCH",   result.amount_mismatches),
+        ("ACCOUNT_MISMATCH",  result.account_mismatches),
+        ("CURRENCY_MISMATCH", result.currency_mismatches),
+        ("OTHER",             result.other_exceptions),
     ]
 
-    for exc_type, count, priority_dist in exc_data:
+    for exc_type, count in exc_data:
+        priority_dist = result.priority_by_type.get(exc_type, "P1:0 / P2:0 / P3:0")
+        ws.cell(row=row, column=1, value=exc_type).font  = _body_font()
         ws.cell(row=row, column=1, value=exc_type).font  = _body_font()
         ws.cell(row=row, column=2, value=count).font     = _body_font()
         ws.cell(row=row, column=3, value=priority_dist).font = _body_font()

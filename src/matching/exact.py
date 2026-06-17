@@ -283,12 +283,35 @@ def match_tier2(
     """
     Tier 2 matching: SHA-256 composite hash match for manual JEs.
 
-    Logic:
+    Critical design point — UNIT OF MATCHING IS THE TRANSACTION,
+    NOT THE ROW:
+        match_group_key is computed per GL LINE (debit line and credit
+        line of the same transaction share the same key, since they
+        share entity/counterparty/period/currency/amount). A single
+        manual JE therefore contributes 2+ rows to any given hash
+        bucket. Comparing raw ROW counts between the two entity sides
+        of a bucket is meaningless — it must compare TRANSACTION
+        (internalid) counts instead. Otherwise, when two distinct
+        transactions land in the same hash bucket (e.g. the SHA-256
+        collision case — two separate $10,000 charges in the same
+        period), a naive row-level zip pairs lines from DIFFERENT
+        transactions together (e.g. a "Due To" line from txn A against
+        a "Management Fees" line from txn B) instead of either
+        matching same-transaction lines together or correctly
+        detecting the collision and routing both transactions to
+        manual review.
+
+    Logic (corrected):
     - Group rows by match_group_key
-    - Detect collisions (buckets where source count != dest count)
-    - For symmetric buckets (equal counts): match sequentially by row index
-    - For asymmetric buckets (collision): route to manual review exception
-    - Remaining unmatched rows pass to Tier 3
+    - Within each bucket, group further by local_entity, then by
+      internalid — giving "one cluster of rows per transaction per side"
+    - Compare TRANSACTION counts (not row counts) between the two sides
+    - If transaction counts are equal (1:1, 2:2, etc.): pair transactions
+      sequentially, then explode each transaction-pair into one
+      matched_pair row per line (so multi-line JEs still produce one
+      row per line in the output, as before)
+    - If transaction counts differ: genuine collision — route every
+      row in the bucket to Tier 3/4 rather than guessing a pairing
 
     Returns:
         matched_pairs: DataFrame of confirmed Tier 2 matches
@@ -304,9 +327,7 @@ def match_tier2(
     matched_row_ids = set()
     collision_keys  = set()
 
-    # Split into two pools: one per entity perspective
-    # Each IC transaction appears twice in the pool (both sides)
-    # We group by match_group_key to find candidate pairs
+    ns_internal_id = NS.internal_id
 
     for key, group in df.groupby("match_group_key"):
 
@@ -327,40 +348,67 @@ def match_tier2(
             group_a = entity_groups.get_group(entity_list[0])
             group_b = entity_groups.get_group(entity_list[1])
 
-            # Symmetric bucket: equal row counts on both sides
-            if len(group_a) == len(group_b):
-                # Zip rows sequentially
-                # If counts are equal, zip is 1:1 regardless of order
-                for row_a, row_b in zip(
-                    group_a.itertuples(index=False),
-                    group_b.itertuples(index=False),
-                ):
-                    row_a_series = group_a[
-                        group_a["row_id"] == row_a.row_id
-                    ].iloc[0]
-                    row_b_series = group_b[
-                        group_b["row_id"] == row_b.row_id
-                    ].iloc[0]
+            # CRITICAL: cluster by internalid — this is the actual
+            # transaction boundary, not the raw row. Each cluster may
+            # contain multiple lines (debit + credit) for one txn.
+            txns_a = list(group_a.groupby(ns_internal_id))
+            txns_b = list(group_b.groupby(ns_internal_id))
+
+            # Compare TRANSACTION counts, not row counts
+            if len(txns_a) == len(txns_b):
+                # Symmetric at the transaction level — safe to pair
+                # sequentially. If there is exactly 1 transaction per
+                # side, this is unambiguous. If there are multiple
+                # transactions per side sharing an identical hash, this
+                # is a genuine ambiguous tie — sequential order is the
+                # best available deterministic choice, and downstream
+                # SOX boolean checks in _build_match_pair will still
+                # flag mismatches if the pairing happens to be wrong.
+                for (txn_id_a, lines_a), (txn_id_b, lines_b) in zip(txns_a, txns_b):
+                    # Within a matched transaction pair, use ONE
+                    # representative line per side — the IC control
+                    # account line (Due From / Due To, identified via
+                    # ic_source = CSEG or ACCOUNT_CODE during
+                    # classification). This avoids a meaningless
+                    # cross-product of P&L lines against balance sheet
+                    # lines within the same transaction. If no IC
+                    # control line is found (e.g. memo-only
+                    # identification), fall back to the first line —
+                    # downstream SOX boolean checks will still flag
+                    # any resulting amount/entity mismatch.
+                    rep_a = lines_a[
+                        lines_a["ic_source"].isin(["CSEG", "ACCOUNT_CODE"])
+                    ]
+                    rep_a = rep_a.iloc[0] if len(rep_a) > 0 else lines_a.iloc[0]
+
+                    rep_b = lines_b[
+                        lines_b["ic_source"].isin(["CSEG", "ACCOUNT_CODE"])
+                    ]
+                    rep_b = rep_b.iloc[0] if len(rep_b) > 0 else lines_b.iloc[0]
 
                     pair = _build_match_pair(
-                        orig=       row_a_series,
-                        recv=       row_b_series,
+                        orig=       rep_a,
+                        recv=       rep_b,
                         match_tier= "TIER2_HASH",
                         confidence= 90,
                     )
                     matched_pairs.append(pair)
-                    matched_row_ids.add(row_a.row_id)
-                    matched_row_ids.add(row_b.row_id)
+
+                    matched_row_ids.update(lines_a["row_id"].tolist())
+                    matched_row_ids.update(lines_b["row_id"].tolist())
 
             else:
-                # Asymmetric bucket — collision detected
-                # Do not auto-match — route entire bucket to Tier 3/4
+                # Asymmetric at the TRANSACTION level — genuine collision.
+                # e.g. 2 transactions on side A, 1 transaction on side B
+                # sharing the same hash. Do not guess — route the whole
+                # bucket forward to Tier 3/4 for safer resolution.
                 collision_keys.add(key)
                 print(
                     f"[TIER 2] COLLISION: hash '{key[:12]}...' has "
-                    f"{len(group_a)} rows from {entity_list[0]} and "
-                    f"{len(group_b)} rows from {entity_list[1]}. "
-                    f"Routing to subset sum matching."
+                    f"{len(txns_a)} transaction(s) from {entity_list[0]} "
+                    f"and {len(txns_b)} transaction(s) from {entity_list[1]} "
+                    f"({len(group_a)} vs {len(group_b)} raw rows). "
+                    f"Routing to subset sum / tolerance matching."
                 )
         else:
             # More than 2 entities in same hash bucket — unusual

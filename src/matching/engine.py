@@ -81,7 +81,6 @@ class MatchResult:
     account_mismatches:  int
     currency_mismatches: int
     other_exceptions:    int
-    priority_by_type:    dict = field(default_factory=dict)
 
     # STP metrics
     stp_rate:            float    # 0.0-1.0
@@ -96,7 +95,7 @@ class MatchResult:
     # File metadata
     input_file_md5:      str = ""
     config_version:      str = ""
-
+    priority_by_type:    dict = field(default_factory=dict)
 
 # -----------------------------------------------------------------------------
 # EXCEPTION CLASSIFIER

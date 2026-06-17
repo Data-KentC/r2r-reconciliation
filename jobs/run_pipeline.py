@@ -12,11 +12,12 @@
 #     4. Save GL lines to database
 #     5. Run matching engine (Tiers 1-5)
 #     6. Save matched pairs and exceptions to database
-#     7. Generate Excel report
-#     8. Upload to Google Drive
-#     9. Update Google Sheets dashboard
-#    10. Send exception alerts to entity accountants
-#    11. Complete run log
+#     7. Save JE drafts to database
+#     8. Generate Excel report
+#     9. Upload to Google Drive
+#    10. Update Google Sheets dashboard
+#    11. Send exception alerts to entity accountants
+#    12. Complete run log
 #
 #   Run modes:
 #     Scheduled: GitHub Actions cron (Mon/Thu 08:00 SGT)
@@ -304,6 +305,12 @@ def run_pipeline(
             f"{resolved_exc} resolved"
         )
 
+        if result.je_drafts is not None and len(result.je_drafts) > 0:
+            repo.save_je_drafts(result.je_drafts)
+            print(f"[PIPELINE] JE drafts saved: {len(result.je_drafts)}")
+        else:
+            print("[PIPELINE] No JE drafts generated this run.")
+
         # ------------------------------------------------------------------
         # Step 8: Generate Excel report + upload
         # ------------------------------------------------------------------
@@ -345,6 +352,7 @@ def run_pipeline(
         print(f"  STP rate:      {result.stp_rate:.1%}")
         print(f"  Matched pairs: {len(result.matched_pairs)}")
         print(f"  Exceptions:    {result.total_exceptions}")
+        print(f"  JE drafts:     {len(result.je_drafts)}")
         print(f"  Report:        {output_path}")
         print(f"  Runtime:       {runtime:.1f}s")
         print("=" * 60 + "\n")

@@ -8,6 +8,7 @@
 #   It sequences all tiers, assembles results, and returns:
 #     - All matched pairs (combined from Tiers 1-4)
 #     - All exceptions (orphans enriched with Tier 5 LLM suggestions)
+#     - JE draft auto-generation (FX_ROUNDING + TIMING_GAP corrections)
 #     - A MatchResult summary for the run log
 #
 #   Processing sequence:
@@ -18,8 +19,9 @@
 #     5. Tier 4: Subset sum (1-to-many)
 #     6. Tier 5: LLM orphan suggestion
 #     7. Classify all remaining rows as exceptions
-#     8. Compute STP rate and compare to previous run
-#     9. Return MatchResult
+#     8. Generate JE drafts from matched pairs requiring correction
+#     9. Compute STP rate and compare to previous run
+#    10. Return MatchResult
 #
 #   STP rate monitoring:
 #     Straight-Through Processing rate = matched / total IC rows.
@@ -33,7 +35,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 import uuid
 
 import pandas as pd
@@ -97,6 +99,10 @@ class MatchResult:
     config_version:      str = ""
     priority_by_type:    dict = field(default_factory=dict)
 
+    # JE drafts — auto-generated correcting entries (Rank 1 feature)
+    je_drafts:            pd.DataFrame = field(default_factory=pd.DataFrame)
+
+
 # -----------------------------------------------------------------------------
 # EXCEPTION CLASSIFIER
 # Classifies remaining unmatched rows into exception types
@@ -128,7 +134,7 @@ def _classify_exceptions(
         exception_type       str
         priority             str   P1 | P2 | P3
         days_aged            int
-        aging_bucket         str   0-30 | 31-60 | 61-90 | 90+
+        aging_bucket          str   0-30 | 31-60 | 61-90 | 90+
         run_id               str
         period               str
         first_seen           str   (populated by repository on insert)
@@ -216,6 +222,189 @@ def _classify_exceptions(
     df["unmatched_currency"] = df[ns.currency]
 
     return df
+
+
+# -----------------------------------------------------------------------------
+# JE DRAFTS AUTO-GENERATION
+# Generates correcting journal entry drafts from matched pairs that
+# require human-reviewed correction. Runs AFTER all 4 tiers complete,
+# BEFORE MatchResult is constructed.
+#
+# Decisions locked in with Kent (2026-06-18):
+#   1. FX_ROUNDING books to orig_entity (placeholder rule — flagged via
+#      config TODO, not yet a verified accounting policy).
+#   2. TIMING_GAP generates a 2-row BALANCED accrual (debit + credit,
+#      same period, linked via shared base ID with -DR/-CR suffixes).
+#      No auto-reversal — reversal remains a manual controller task.
+#   3. Tier 4 subset-sum groups get NO auto-JE — informational only,
+#      by design (zero variance, nothing to correct).
+#   4. account_code is sourced from config.entities[x].fx_suspense_account
+#      / in_transit_clearing_account (new EntityConfig fields).
+# -----------------------------------------------------------------------------
+
+def generate_je_drafts(
+    matched_pairs: pd.DataFrame,
+    run_id:        str,
+    period:        str,
+) -> pd.DataFrame:
+    """
+    Generates auto-draft JE rows from matched pairs that require a
+    correcting entry.
+
+    Input schema (from _combine_matched_pairs output / exact.py /
+    tolerance.py / subset_sum.py _build_match_pair output):
+        match_id, run_id, period,
+        orig_entity, orig_internalid, orig_trandate, orig_currency,
+        orig_fxamount, orig_account_code, orig_account_name, orig_row_id,
+        recv_entity, recv_internalid, recv_trandate, recv_currency,
+        recv_fxamount, recv_account_code, recv_account_name, recv_row_id,
+        match_tier, confidence_score,
+        is_entity_matched, is_currency_matched, is_fxamount_exact,
+        is_period_matched,
+        variance_fxamount, variance_usd,
+        fx_rounding_variance, operational_variance, tolerance_reason,
+        group_pairing_id
+
+    Output schema (matches JEDraft table in models.py and
+    repository.py's save_je_drafts()):
+        je_draft_id, run_id, period,
+        source_match_id, source_exception_id,
+        je_type, generated_by,
+        subsidiary, account_code, debit, credit, currency, fxamount, memo,
+        requires_review, posted_to_netsuite
+
+    Returns:
+        DataFrame of JE draft rows, ready for repo.save_je_drafts().
+        Empty DataFrame if no matches require a correcting entry.
+    """
+    je_rows: List[dict] = []
+
+    if matched_pairs is None or len(matched_pairs) == 0:
+        return pd.DataFrame()
+
+    for _, pair in matched_pairs.iterrows():
+
+        # -------------------------------------------------------------
+        # CASE A: Tier 3 FX_ROUNDING — small, mechanical, safe to auto-JE
+        # -------------------------------------------------------------
+        if (
+            pair.get("match_tier") == "TIER3_TOLERANCE"
+            and pair.get("tolerance_reason") == "FX_ROUNDING"
+        ):
+            fx_rounding_amt = float(pair.get("fx_rounding_variance", 0) or 0)
+
+            if fx_rounding_amt > 0:
+                booking_entity = pair.get("orig_entity", "")
+                fx_account = (
+                    config.entities[booking_entity].fx_suspense_account
+                    if booking_entity in config.entities
+                    else "TODO_FX_SUSPENSE"
+                )
+
+                je_rows.append({
+                    "je_draft_id":         f"JE-{uuid.uuid4().hex[:10].upper()}",
+                    "run_id":              run_id,
+                    "period":              period,
+                    "source_match_id":     pair.get("match_id", ""),
+                    "source_exception_id": None,
+                    "je_type":             "FX_ROUNDING",
+                    "generated_by":        "TIER3_FX",
+                    "subsidiary":          booking_entity,
+                    "account_code":        fx_account,
+                    "debit":               fx_rounding_amt,
+                    "credit":              None,
+                    "currency":            pair.get("orig_currency", ""),
+                    "fxamount":            fx_rounding_amt,
+                    "memo": (
+                        f"Auto-generated FX rounding adjustment. "
+                        f"Match ID: {pair.get('match_id', '')}. "
+                        f"Variance: {fx_rounding_amt:.2f} "
+                        f"{pair.get('orig_currency', '')}. "
+                        f"Counterparty: {pair.get('recv_entity', '')}."
+                    ),
+                    "requires_review":     True,
+                    "posted_to_netsuite":  False,
+                })
+
+        # -------------------------------------------------------------
+        # CASE B: Tier 3 TIMING_GAP — 2-row balanced in-transit accrual
+        # (debit + credit, same period). No reversal row generated.
+        # -------------------------------------------------------------
+        elif (
+            pair.get("match_tier") == "TIER3_TOLERANCE"
+            and pair.get("tolerance_reason") == "TIMING_GAP"
+        ):
+            amt = float(pair.get("orig_fxamount", 0) or 0)
+            booking_entity = pair.get("orig_entity", "")
+            clearing_account = (
+                config.entities[booking_entity].in_transit_clearing_account
+                if booking_entity in config.entities
+                else "TODO_IN_TRANSIT_CLEARING"
+            )
+            group_id = f"JE-{uuid.uuid4().hex[:10].upper()}"
+
+            shared_memo = (
+                f"Auto-generated in-transit accrual — timing gap "
+                f"between {pair.get('orig_trandate', '')} and "
+                f"{pair.get('recv_trandate', '')}. "
+                f"Match ID: {pair.get('match_id', '')}. "
+                f"Reversal required next period — not auto-generated."
+            )
+
+            # Debit leg
+            je_rows.append({
+                "je_draft_id":         f"{group_id}-DR",
+                "run_id":              run_id,
+                "period":              period,
+                "source_match_id":     pair.get("match_id", ""),
+                "source_exception_id": None,
+                "je_type":             "IN_TRANSIT",
+                "generated_by":        "TIER3_TRANSIT",
+                "subsidiary":          booking_entity,
+                "account_code":        clearing_account,
+                "debit":               amt,
+                "credit":              None,
+                "currency":            pair.get("orig_currency", ""),
+                "fxamount":            amt,
+                "memo":                shared_memo,
+                "requires_review":     True,
+                "posted_to_netsuite":  False,
+            })
+
+            # Credit leg (balancing entry, same accrual, same period)
+            je_rows.append({
+                "je_draft_id":         f"{group_id}-CR",
+                "run_id":              run_id,
+                "period":              period,
+                "source_match_id":     pair.get("match_id", ""),
+                "source_exception_id": None,
+                "je_type":             "IN_TRANSIT",
+                "generated_by":        "TIER3_TRANSIT",
+                "subsidiary":          booking_entity,
+                "account_code":        clearing_account,
+                "debit":               None,
+                "credit":              amt,
+                "currency":            pair.get("orig_currency", ""),
+                "fxamount":            amt,
+                "memo":                shared_memo,
+                "requires_review":     True,
+                "posted_to_netsuite":  False,
+            })
+
+        # -------------------------------------------------------------
+        # CASE C: Tier 4 subset sum — NO auto-JE, informational only.
+        # Zero variance by definition, nothing to correct.
+        # -------------------------------------------------------------
+        elif pair.get("match_tier") == "TIER4_SUBSET_SUM":
+            pass
+
+        # Tier 1 (exact tranid) and Tier 2 (hash) matches are clean —
+        # by definition no variance, no JE needed.
+
+    if not je_rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(je_rows)
 
 
 # -----------------------------------------------------------------------------
@@ -309,7 +498,8 @@ def run_matching_engine(
         previous_stp: STP rate from previous run (for anomaly detection)
 
     Returns:
-        MatchResult with all matched pairs, exceptions, and run statistics.
+        MatchResult with all matched pairs, exceptions, JE drafts,
+        and run statistics.
     """
     started_at = datetime.utcnow()
     period     = meta.period
@@ -372,7 +562,16 @@ def run_matching_engine(
     )
 
     # ------------------------------------------------------------------
-    # Step 9: Compute STP rate
+    # Step 9: Generate JE drafts from matched pairs requiring correction
+    # ------------------------------------------------------------------
+    je_drafts_df = generate_je_drafts(
+        matched_pairs= matched_pairs_df,
+        run_id=        run_id,
+        period=        period,
+    )
+
+    # ------------------------------------------------------------------
+    # Step 10: Compute STP rate
     # Count matched rows (each pair = 2 original rows matched)
     # ------------------------------------------------------------------
     total_ic_rows  = len(ic_df)
@@ -392,9 +591,9 @@ def run_matching_engine(
     )
 
     # ------------------------------------------------------------------
-    # Step 10: Count exception types
+    # Step 11: Count exception types
     # ------------------------------------------------------------------
-    
+
     exc_counts = {}
     priority_by_type = {}
     if len(exceptions_df) > 0:
@@ -407,7 +606,7 @@ def run_matching_engine(
             .apply(lambda r: f"P1:{r['P1']} / P2:{r['P2']} / P3:{r['P3']}", axis=1)
             .to_dict()
         )
-    
+
     llm_suggested = 0
     if len(enriched_orphans) > 0:
         llm_suggested = (
@@ -416,7 +615,7 @@ def run_matching_engine(
         ).sum()
 
     # ------------------------------------------------------------------
-    # Step 11: Build and return MatchResult
+    # Step 12: Build and return MatchResult
     # ------------------------------------------------------------------
     completed_at = datetime.utcnow()
 
@@ -445,6 +644,7 @@ def run_matching_engine(
         stp_alert_fired=  stp_alert,
         matched_pairs=    matched_pairs_df,
         exceptions=       exceptions_df,
+        je_drafts=        je_drafts_df,
         input_file_md5=   meta.file_md5,
     )
 
@@ -463,6 +663,7 @@ def run_matching_engine(
     print(f"  Tier 4 matches:   {tier4_count}  pairs (subset sum)")
     print(f"  LLM suggestions:  {int(llm_suggested)}")
     print(f"  Exceptions:       {len(exceptions_df)}")
+    print(f"  JE drafts:        {len(je_drafts_df)}")
     print(f"  STP rate:         {stp_rate:.1%}")
     print(f"  STP delta:        {stp_delta:+.1%}")
     print(f"  STP alert:        {'YES ⚠️' if stp_alert else 'No'}")
@@ -515,6 +716,7 @@ if __name__ == "__main__":
     print(f"STP Rate:         {result.stp_rate:.1%}")
     print(f"Matched pairs:    {len(result.matched_pairs)}")
     print(f"Exceptions:       {len(result.exceptions)}")
+    print(f"JE drafts:        {len(result.je_drafts)}")
 
     if len(result.matched_pairs) > 0:
         print("\nMatched pairs sample:")
@@ -531,4 +733,11 @@ if __name__ == "__main__":
             "exception_type", "priority",
             "unmatched_fxamount", "days_aged",
             "llm_suggested_entity", "llm_routing",
+        ]].head(10).to_string())
+
+    if len(result.je_drafts) > 0:
+        print("\nJE drafts sample:")
+        print(result.je_drafts[[
+            "je_draft_id", "je_type", "subsidiary",
+            "account_code", "debit", "credit", "requires_review",
         ]].head(10).to_string())

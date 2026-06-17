@@ -33,6 +33,8 @@ entities:
     backup_controller:  "sg_backup@anthrotic.com"        # TODO: real email
     telegram_chat_id:   ""                               # TODO: Telegram setup
     active:             true
+    fx_suspense_account:         "TODO_FX_SUSPENSE_SG"           # TODO: real GL account code
+    in_transit_clearing_account: "TODO_IN_TRANSIT_CLEARING_SG"   # TODO: real GL account code
 
   ANTH-AU:
     name:               "Anthrotic Australia"
@@ -42,6 +44,8 @@ entities:
     backup_controller:  "au_backup@anthrotic.com"        # TODO: real email
     telegram_chat_id:   ""
     active:             true
+    fx_suspense_account:         "TODO_FX_SUSPENSE_AU"
+    in_transit_clearing_account: "TODO_IN_TRANSIT_CLEARING_AU"
 
   ANTH-IN:
     name:               "Anthrotic India"
@@ -51,6 +55,8 @@ entities:
     backup_controller:  "in_backup@anthrotic.com"        # TODO: real email
     telegram_chat_id:   ""
     active:             true
+    fx_suspense_account:         "TODO_FX_SUSPENSE_IN"
+    in_transit_clearing_account: "TODO_IN_TRANSIT_CLEARING_IN"
 
   ANTH-JP:
     name:               "Anthrotic Japan"
@@ -60,6 +66,8 @@ entities:
     backup_controller:  "jp_backup@anthrotic.com"        # TODO: real email
     telegram_chat_id:   ""
     active:             true
+    fx_suspense_account:         "TODO_FX_SUSPENSE_JP"
+    in_transit_clearing_account: "TODO_IN_TRANSIT_CLEARING_JP"
 
   ANTH-HK:
     name:               "Anthrotic Hong Kong"
@@ -69,6 +77,8 @@ entities:
     backup_controller:  "hk_backup@anthrotic.com"        # TODO: real email
     telegram_chat_id:   ""
     active:             true
+    fx_suspense_account:         "TODO_FX_SUSPENSE_HK"
+    in_transit_clearing_account: "TODO_IN_TRANSIT_CLEARING_HK"
 
 # -----------------------------------------------------------------------------
 # NETSUITE FIELD MAPPING
@@ -81,15 +91,15 @@ netsuite:
     internal_id:          "internalid"
     line_sequence:        "linesequencenumber"
     tran_date:            "trandate"
-    tran_id:              "tranid"               # Shared key for AICJEs
-    account:              "account"
-    debit_amount:         "debitamount"
-    credit_amount:        "creditamount"
-    currency:             "currency"
-    fx_amount:            "fxamount"
-    line_subsidiary:      "subsidiarynohierarchy" # Flat string, not hierarchical
-    cseg_ic:              "cseg_apac_ic"          # TODO: Confirm with NetSuite admin
-    memo:                 "memo"
+    tran_id:               "tranid"               # Shared key for AICJEs
+    account:               "account"
+    debit_amount:           "debitamount"
+    credit_amount:          "creditamount"
+    currency:              "currency"
+    fx_amount:             "fxamount"
+    line_subsidiary:       "subsidiarynohierarchy" # Flat string, not hierarchical
+    cseg_ic:               "cseg_apac_ic"          # TODO: Confirm with NetSuite admin
+    memo:                  "memo"
 
   # Account code ranges for IC identification fallback
   # Used when cseg_apac_ic is blank (15-25% of manual JEs)
@@ -377,4 +387,6 @@ period_lock:
 # 10. Set database.sqlite_fallback.enabled to false
 # 11. Set up GPG key on GitHub for signed commits
 # 12. Review and update last_verified_date above
+# 13. Replace TODO_FX_SUSPENSE_xx and TODO_IN_TRANSIT_CLEARING_xx with
+#     real GL account codes per entity (added for JE Drafts auto-generation)
 # =============================================================================

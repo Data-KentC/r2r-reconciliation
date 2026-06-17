@@ -438,6 +438,7 @@ def run_matching_engine(
         account_mismatches=exc_counts.get("ACCOUNT_MISMATCH", 0),
         currency_mismatches=exc_counts.get("CURRENCY_MISMATCH", 0),
         other_exceptions= len(exceptions_df) - sum(exc_counts.values()),
+        priority_by_type= priority_by_type,
         stp_rate=         stp_rate,
         stp_previous_run= previous_stp,
         stp_delta=        stp_delta,
